@@ -35,7 +35,7 @@ class ScriptArguments:
         metadata={"help": "If you want to resume training where it left off."},
     )
     deepspeed: Optional[str] = field(
-        default="/home/guhao/xw/alignment-handbook/recipes/accelerate_configs/lmdp3.json",
+        default="/home/xw/alignment-handbook/recipes/accelerate_configs/lmdp3.json",
         #default=None,
         metadata={
             "help": "Path to deepspeed config if using deepspeed. You may need this if the model that you want to train doesn't fit on a single GPU."
@@ -47,7 +47,7 @@ class ScriptArguments:
     learning_rate: Optional[float] = field(default=5e-6)
     weight_decay: Optional[float] = field(default=0.001)
     model_name: Optional[str] = field(
-        # default="/home/guhao/xw/trl/models/5e6_data_mixture1/last_checkpoint",
+        # default="/home/xw/trl/models/5e6_data_mixture1/last_checkpoint",
         default="google/gemma-7b-it",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
