@@ -42,11 +42,11 @@ class ScriptArguments:
     )
     per_device_train_batch_size: Optional[int] = field(default=1)
     per_device_eval_batch_size: Optional[int] = field(default=1)
-    gradient_accumulation_steps: Optional[int] = field(default=64)
-    learning_rate: Optional[float] = field(default=5e-6)
+    gradient_accumulation_steps: Optional[int] = field(default=32)
+    learning_rate: Optional[float] = field(default=1e-5)
     weight_decay: Optional[float] = field(default=0.001)
     model_name: Optional[str] = field(
-        default="google/gemma-7b-it",
+        default="google/gemma-2b-it",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
         },
