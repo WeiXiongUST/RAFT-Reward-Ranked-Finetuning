@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
-#import evaluate
+# import evaluate
 import numpy as np
 import torch
 import torch.nn as nn
 from datasets import load_dataset
-#from peft import LoraConfig, TaskType, get_peft_model
+# from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -17,7 +17,6 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.utils import PaddingStrategy
-from alignment import get_tokenizer
 
 import pdb
 
@@ -28,15 +27,15 @@ class ScriptArguments:
     """
     These arguments vary depending on how many GPUs you have, what their capacity and features are, and what size model you want to train.
     """
-
-    local_rank: Optional[int] = field(default=-1, metadata={"help": "Used for multi-gpu"})
+    local_rank: Optional[int] = field(
+        default=-1, metadata={"help": "Used for multi-gpu"})
     resume_from_checkpoint: Optional[bool] = field(
         default=False,
         metadata={"help": "If you want to resume training where it left off."},
     )
     deepspeed: Optional[str] = field(
-        default="/home/xw/alignment-handbook/recipes/accelerate_configs/lmdp3.json",
-        #default=None,
+        default="dp3.json",
+        # default=None,
         metadata={
             "help": "Path to deepspeed config if using deepspeed. You may need this if the model that you want to train doesn't fit on a single GPU."
         },
@@ -47,18 +46,11 @@ class ScriptArguments:
     learning_rate: Optional[float] = field(default=5e-6)
     weight_decay: Optional[float] = field(default=0.001)
     model_name: Optional[str] = field(
-        # default="/home/xw/trl/models/5e6_data_mixture1/last_checkpoint",
         default="google/gemma-7b-it",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
         },
     )
-    # model_name: Optional[str] = field(
-    #     default="mistralai/Mistral-7B-Instruct-v0.2",
-    #     metadata={
-    #         "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
-    #     },
-    # )
     tokenizer_name: Optional[str] = field(
         default=None,
         metadata={
@@ -75,22 +67,26 @@ class ScriptArguments:
         default=1,
         metadata={"help": "The number of training epochs for the reward model."},
     )
-    train_subset: Optional[int] = field(
-        default=100000,
-        metadata={"help": "The size of the subset of the training data to use"},
+    train_set_path: Optional[str] = field(
+        default="",
+        metadata={"help": "The dir of the subset of the training data to use"},
     )
-    eval_subset: Optional[int] = field(
-        default=50000,
-        metadata={"help": "The size of the subset of the eval data to use"},
+    eval_set_path: Optional[str] = field(
+        default="",
+        metadata={"help": "The dir of the subset of the eval data to use"},
+    )
+    output_path: Optional[str] = field(
+        default="",
+        metadata={"help": "The dir for output model"},
     )
     gradient_checkpointing: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables gradient checkpointing."},
     )
     optim: Optional[str] = field(
-        #default="adamw_hf",
+        # default="adamw_hf",
         default="paged_adamw_32bit",
-        #default="adamw_torch_fused",
+        # default="adamw_torch_fused",
         metadata={"help": "The optimizer to use."},
     )
     lr_scheduler_type: Optional[str] = field(
@@ -111,27 +107,29 @@ script_args = parser.parse_args_into_dataclasses()[0]
 tokenizer_name = script_args.model_name
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 
-### Adjusted according to the base model
-#tokenizer.pad_token = tokenizer.eos_token
+# Adjusted according to the base model
+# Need to do this for the models that don't have an official pad token.
+# tokenizer.pad_token = tokenizer.eos_token
 tokenizer.truncation_side = "left"
 tokenizer.model_max_length = script_args.max_length
 ###
 
-train_path = "/home/xw/train_preference_datasets/datasets/gathered_dataset/hh_capybara_orca_all__shp_max1_ultra_helpsteer_random.json"
-eval_path = "/home/xw/preference_datasets/validate_model_train/eval_dataset.json"
-output_name = "/home/xw/trl/models/7b_5e6_gemma_mixture1_bz256_fix_eos/"
 
-## Get the dataset
+# Get the dataset
+train_path = script_args.train_set_path
+#"/home/xw/train_preference_datasets/datasets/gathered_dataset/hh_capybara_orca_all__shp_max1_ultra_helpsteer_random.json"
+eval_path = script_args.eval_set_path
+output_name = script_args.output_path
+
+
+
 def build_dataset(tokenizer, train_path, eval_path):
-    ''' 
-    We assume that we have preprocessed the dataset appropriately such that the sample is organized as follows:
-    {"positive": prompt + answer_positive, "negative": prompt + answer_negative}, where the positive response is preferred.
-    '''
-
 
     def tokenize(sample):
-        sample['positive'] = tokenizer.apply_chat_template(sample['chosen'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
-        sample['negative'] = tokenizer.apply_chat_template(sample['rejected'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
+        sample['positive'] = tokenizer.apply_chat_template(
+            sample['chosen'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
+        sample['negative'] = tokenizer.apply_chat_template(
+            sample['rejected'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
         tokenized_pos = tokenizer(sample['positive'], truncation=True)
         tokenized_neg = tokenizer(sample['negative'], truncation=True)
         sample["input_ids_j"] = tokenized_pos["input_ids"]
@@ -140,40 +138,25 @@ def build_dataset(tokenizer, train_path, eval_path):
         sample["attention_mask_k"] = tokenized_neg["attention_mask"]
         return sample
 
-
-    
-    ds = load_dataset("json", data_files=train_path, split="train", field="instances")#.select(range(20000))
-
-    for sample in ds:
-        sample['positive'] = tokenizer.apply_chat_template(sample['chosen'], tokenize=False, add_generation_prompt=False).replace("<bos>", "")
-        tokenized_pos = tokenizer(sample['positive'], truncation=True)
-        print(sample['positive'])
-        print("ZZZZZZZZZZZ")
-        print(tokenizer.decode(tokenized_pos['input_ids']))
-        break
-
+    ds = load_dataset("json", data_files=train_path, split="train",
+                      field="instances")  # .select(range(20000))
     ds = ds.map(tokenize, num_proc=8)
-    # ds = ds.map(tokenize, batched=False)
-    #ds = ds.filter(lambda x: len(x["input_ids_j"]) >= 40 and len(x["input_ids_k"]) >= 40)
+
     eval_dataset = None
 
     train_dataset = ds
-    eval_dataset = load_dataset("json", data_files=eval_path, split="train", field="instances").select(range(500))
+    eval_dataset = load_dataset(
+        "json", data_files=eval_path, split="train", field="instances").select(range(500))
     eval_dataset = eval_dataset.map(tokenize, num_proc=8)
     # eval_dataset = eval_dataset.map(tokenize, batched=False)
 
-
     return train_dataset, eval_dataset
 
+
 train_dataset, eval_dataset = build_dataset(tokenizer, train_path, eval_path)
-#if not eval_dataset and pipeline_args.eval_steps > 0:
-#    raise valueerror("Cannot evaluate on an empty eval set")
 print("Training set: ", len(train_dataset), " Eval set: ", len(eval_dataset))
 
-## Define the trainer
-
-
-    
+# Define the trainer
 
 
 training_args = TrainingArguments(
@@ -203,7 +186,6 @@ training_args = TrainingArguments(
 )
 
 
-
 # peft_config = LoraConfig(
 #     task_type=TaskType.SEQ_CLS,
 #     inference_mode=False,
@@ -218,8 +200,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 # model = get_peft_model(model, peft_config)
 # model.print_trainable_parameters()
 
-# Need to do this for gpt2, because it doesn't have an official pad token.
-#model.config.pad_token_id = tokenizer.eos_token_id
+
 model.config.use_cache = not script_args.gradient_checkpointing
 num_proc = 24  # Can adjust to be higher if you have more processors.
 original_columns = train_dataset.column_names
@@ -274,21 +255,24 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-## Define the trainer
+# Define the trainer
 def compute_metrics(eval_pred):
     result = {}
     pos_predictions_scores = eval_pred.predictions[0]
     neg_predictions_scores = eval_pred.predictions[1]
     # We assume that the first sample is preferred by default in groundtruth
-    result['accuracy'] = np.sum(pos_predictions_scores > neg_predictions_scores) / len(pos_predictions_scores)
+    result['accuracy'] = np.sum(
+        pos_predictions_scores > neg_predictions_scores) / len(pos_predictions_scores)
     return result
 
 
 class RewardTrainer(Trainer):
     # Define how to compute the reward loss. We use the InstructGPT pairwise logloss: https://arxiv.org/abs/2203.02155
     def compute_loss(self, model, inputs, return_outputs=False):
-        rewards_j = model(input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
-        rewards_k = model(input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
+        rewards_j = model(
+            input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
+        rewards_k = model(
+            input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
         loss = -nn.functional.logsigmoid(rewards_j - rewards_k).mean()
         if return_outputs:
             return loss, {"rewards_j": rewards_j, "rewards_k": rewards_k}
@@ -302,13 +286,14 @@ trainer = RewardTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     compute_metrics=compute_metrics,
-    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer, max_length=script_args.max_length),
+    data_collator=RewardDataCollatorWithPadding(
+        tokenizer=tokenizer, max_length=script_args.max_length),
 )
 
 
 # trainer.train(script_args.resume_from_checkpoint)
 trainer.train()
-    
+
 
 print("Saving last checkpoint of the model")
 model.save_pretrained(output_name + "last_checkpoint")
