@@ -34,19 +34,19 @@ class ScriptArguments:
         metadata={"help": "If you want to resume training where it left off."},
     )
     deepspeed: Optional[str] = field(
-        default="dp3.json",
-        # default=None,
+        #default="dp3.json",
+         default=None,
         metadata={
             "help": "Path to deepspeed config if using deepspeed. You may need this if the model that you want to train doesn't fit on a single GPU."
         },
     )
     per_device_train_batch_size: Optional[int] = field(default=1)
     per_device_eval_batch_size: Optional[int] = field(default=1)
-    gradient_accumulation_steps: Optional[int] = field(default=32)
-    learning_rate: Optional[float] = field(default=1e-5)
+    gradient_accumulation_steps: Optional[int] = field(default=64)
+    learning_rate: Optional[float] = field(default=5e-6)
     weight_decay: Optional[float] = field(default=0.001)
     model_name: Optional[str] = field(
-        default="google/gemma-2b-it",
+        default="google/gemma-7b-it",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
         },
@@ -80,7 +80,7 @@ class ScriptArguments:
         metadata={"help": "The dir for output model"},
     )
     gradient_checkpointing: Optional[bool] = field(
-        default=False,
+        default=True,
         metadata={"help": "Enables gradient checkpointing."},
     )
     optim: Optional[str] = field(
@@ -93,7 +93,7 @@ class ScriptArguments:
         default="cosine",
         metadata={"help": "The lr scheduler"},
     )
-    max_length: Optional[int] = field(default=2048)
+    max_length: Optional[int] = field(default=4096)
     eval_first_step: Optional[bool] = field(
         default=False,
         metadata={"help": "Whether to run eval after the first step"},
@@ -109,18 +109,19 @@ tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
 
 # Adjusted according to the base model
 # Need to do this for the models that don't have an official pad token.
-# tokenizer.pad_token = tokenizer.eos_token
+#tokenizer.pad_token = tokenizer.eos_token
+#tokenizer.pad_token_id = tokenizer.eos_token_id
+
 tokenizer.truncation_side = "left"
 tokenizer.model_max_length = script_args.max_length
 ###
 
 
 # Get the dataset
-train_path = script_args.train_set_path
-#"/home/xw/train_preference_datasets/datasets/gathered_dataset/hh_capybara_orca_all__shp_max1_ultra_helpsteer_random.json"
-eval_path = script_args.eval_set_path
-output_name = script_args.output_path
-
+train_path = "weqweasdas/preference_dataset_mixture"
+# "/home/xw/train_preference_datasets/datasets/gathered_dataset/hh_capybara_orca_all__shp_max1_ultra_helpsteer_random.json"
+eval_path = "weqweasdas/preference_dataset_mixture"
+output_name = "/home/zihaoli5/rsf/rm_models/gemma_7b_4096"
 
 
 def build_dataset(tokenizer, train_path, eval_path):
@@ -138,15 +139,16 @@ def build_dataset(tokenizer, train_path, eval_path):
         sample["attention_mask_k"] = tokenized_neg["attention_mask"]
         return sample
 
-    ds = load_dataset("json", data_files=train_path, split="train",
-                      field="instances")  # .select(range(20000))
+    #ds = load_dataset("json", data_files=train_path, split="train",                  field="instances")  # .select(range(20000))
+    ds = load_dataset(train_path, split="train").shuffle(seed=42)
     ds = ds.map(tokenize, num_proc=8)
 
     eval_dataset = None
 
     train_dataset = ds
-    eval_dataset = load_dataset(
-        "json", data_files=eval_path, split="train", field="instances").select(range(500))
+    #eval_dataset = load_dataset(
+    #    "json", data_files=eval_path, split="train", field="instances").select(range(500))
+    eval_dataset = load_dataset(train_path, split="train").select(range(500))
     eval_dataset = eval_dataset.map(tokenize, num_proc=8)
     # eval_dataset = eval_dataset.map(tokenize, batched=False)
 
@@ -169,7 +171,7 @@ training_args = TrainingArguments(
     evaluation_strategy="steps",
     eval_steps=500,
     save_strategy="steps",
-    save_steps=2,
+    save_steps=1000,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     gradient_checkpointing=script_args.gradient_checkpointing,
     deepspeed=script_args.deepspeed,
@@ -202,6 +204,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 
 model.config.use_cache = not script_args.gradient_checkpointing
+#model.config.pad_token_id = tokenizer.pad_token_id
 num_proc = 24  # Can adjust to be higher if you have more processors.
 original_columns = train_dataset.column_names
 
@@ -209,47 +212,39 @@ original_columns = train_dataset.column_names
 # We need to define a special data collator that batches the data in our j vs k format.
 @dataclass
 class RewardDataCollatorWithPadding:
-    tokenizer: PreTrainedTokenizerBase
+    tokenizer: AutoTokenizer
     padding: Union[bool, str, PaddingStrategy] = True
     max_length: Optional[int] = None
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        features_j = []
-        features_k = []
+        merged_features = []
+        # features_j = []
+        # features_k = []
         for feature in features:
-            features_j.append(
+            merged_features.append(
                 {
                     "input_ids": feature["input_ids_j"],
                     "attention_mask": feature["attention_mask_j"],
                 }
             )
-            features_k.append(
+            merged_features.append(
                 {
                     "input_ids": feature["input_ids_k"],
                     "attention_mask": feature["attention_mask_k"],
                 }
             )
-        batch_j = self.tokenizer.pad(
-            features_j,
-            padding=self.padding,
-            max_length=self.max_length,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch_k = self.tokenizer.pad(
-            features_k,
+        batch = self.tokenizer.pad(
+            merged_features,
             padding=self.padding,
             max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
         batch = {
-            "input_ids_j": batch_j["input_ids"],
-            "attention_mask_j": batch_j["attention_mask"],
-            "input_ids_k": batch_k["input_ids"],
-            "attention_mask_k": batch_k["attention_mask"],
+            "input_ids": batch["input_ids"],
+            "attention_mask": batch["attention_mask"],
             "return_loss": True,
         }
         return batch
@@ -267,12 +262,15 @@ def compute_metrics(eval_pred):
 
 
 class RewardTrainer(Trainer):
-    # Define how to compute the reward loss. We use the InstructGPT pairwise logloss: https://arxiv.org/abs/2203.02155
     def compute_loss(self, model, inputs, return_outputs=False):
-        rewards_j = model(
-            input_ids=inputs["input_ids_j"], attention_mask=inputs["attention_mask_j"])[0]
-        rewards_k = model(
-            input_ids=inputs["input_ids_k"], attention_mask=inputs["attention_mask_k"])[0]
+        rewards = model(
+            input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"]
+        )[0]
+        bsz = rewards.size(0)
+        jidx = torch.arange(0, bsz, 2)
+        kidx = jidx + 1
+        rewards_j = rewards[jidx]
+        rewards_k = rewards[kidx]
         loss = -nn.functional.logsigmoid(rewards_j - rewards_k).mean()
         if return_outputs:
             return loss, {"rewards_j": rewards_j, "rewards_k": rewards_k}
