@@ -1,0 +1,50 @@
+# Model arguments
+model_name_or_path: HuggingFaceH4/mistral-7b-sft-beta
+hub_model_id: HuggingFaceH4/mistral-7b-sft-beta
+model_revision: main
+torch_dtype: bfloat16
+use_flash_attention_2: true
+
+# Data training arguments
+chat_template: "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
+
+#"{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}"
+
+dataset_mixer:
+  "xxzz": 1.0
+dataset_splits:
+- train
+#- test_sft
+preprocessing_num_workers: 12
+
+# SFT trainer config
+bf16: true
+do_eval: False
+evaluation_strategy: epoch
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: False
+hub_model_id: HuggingFaceH4/mistral-7b-sft-beta
+hub_strategy: every_save
+learning_rate: 2.0e-06
+log_level: info
+logging_steps: 5
+logging_strategy: steps
+lr_scheduler_type: constant
+max_seq_length: 4096
+max_steps: -1
+num_train_epochs: 2
+output_dir: /home/rsf/rsf_hf_mistral_rsf_baseline_restart_small_lr/model3
+overwrite_output_dir: true
+per_device_eval_batch_size: 1
+per_device_train_batch_size: 8
+push_to_hub: False
+remove_unused_columns: true
+report_to:
+- wandb
+save_strategy: "steps"
+save_steps: 10000
+save_total_limit: 1
+seed: 42
+warmup_ratio: 0.03
